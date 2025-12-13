@@ -14,6 +14,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.cluster import KMeans
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 from database.connection import get_db_connection
 from database.init_db import init_db
@@ -243,6 +244,13 @@ class PredictResponse(BaseModel):
 
 
 app = FastAPI(title="API Clustering Ingredientes", version="1.0")
+app.add_middleware(CORSMiddleware,
+allow_origins=["*"],
+allow_credentials=True,
+allow_methods=["*"],
+allow_headers=["*"],
+)
+
 @app.on_event("startup")
 def on_startup():
     init_db()
