@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  api-cluster:
+    container_name: api-cluster
+    build: .
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "4010:4010"
