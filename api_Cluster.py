@@ -151,6 +151,124 @@ def load_pipeline():
 
 def entrenar_pipeline(category_map=None, dataset_file=DATASET_FILE, n_default=500):
     category_map = category_map or load_or_init_category_map()
+
+    if os.path.exists(dataset_file):
+        df = pd.read_csv(dataset_file)
+    else:
+        df = generar_dataset_sintetico(n=n_default, category_map=category_map)
+
+    df["categoria_id"] = df["categoria_id"].astype(str)
+
+    cat_features = ["unidad_medida", "categoria_id"]
+    num_features = ["cantidad_unidad", "cantidad_normalizada", "tasa_recompra", "dias_promedio"]
+
+    preprocessor = ColumnTransformer([
+        ("onehot_cat", OneHotEncoder(sparse_output=False, handle_unknown="ignore"), cat_features),
+        ("num", StandardScaler(), num_features)
+    ])
+
+    pipeline = Pipeline([
+        ("pre", preprocessor),
+        ("kmeans", KMeans(n_clusters=4, random_state=42))
+    ])
+
+    X = df[cat_features + num_features]
+    pipeline.fit(X)
+
+    df["cluster"] = pipeline.named_steps["kmeans"].labels_
+
+    df.to_csv(dataset_file, index=False, encoding="utf-8")
+    save_pipeline(pipeline)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        for _, row in df.iterrows():
+
+            cursor.execute(
+                "SELECT id FROM ingredientes WHERE ingrediente = %s AND unidad_medida = %s LIMIT 1",
+                (row["ingrediente"], row["unidad_medida"])
+            )
+            r = cursor.fetchone()
+
+            if r:
+                ingrediente_id = r[0]
+                cursor.execute("""
+                    UPDATE ingredientes
+                    SET categoria_id=%s,
+                        cantidad_unidad=%s,
+                        cantidad_compras=%s,
+                        tasa_recompra=%s,
+                        dias_promedio=%s,
+                        tipo_base=%s,
+                        cantidad_normalizada=%s,
+                        unidad_base=%s,
+                        cluster=%s
+                    WHERE id=%s
+                """, (
+                    int(row["categoria_id"]),
+                    float(row["cantidad_unidad"]),
+                    int(row["cantidad_compras"]),
+                    float(row["tasa_recompra"]),
+                    int(row["dias_promedio"]),
+                    row["tipo_base"],
+                    float(row["cantidad_normalizada"]),
+                    row["unidad_base"],
+                    int(row["cluster"]),
+                    ingrediente_id
+                ))
+            else:
+                cursor.execute("""
+                    INSERT INTO ingredientes (
+                        ingrediente, categoria_id, unidad_medida, cantidad_unidad,
+                        cantidad_compras, tasa_recompra, dias_promedio, tipo_base,
+                        cantidad_normalizada, unidad_base, cluster
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
+                """, (
+                    row["ingrediente"],
+                    int(row["categoria_id"]),
+                    row["unidad_medida"],
+                    float(row["cantidad_unidad"]),
+                    int(row["cantidad_compras"]),
+                    float(row["tasa_recompra"]),
+                    int(row["dias_promedio"]),
+                    row["tipo_base"],
+                    float(row["cantidad_normalizada"]),
+                    row["unidad_base"],
+                    int(row["cluster"])
+                ))
+
+                ingrediente_id = cursor.fetchone()[0]
+
+            hoy = date.today()
+            cursor.execute("""
+                INSERT INTO historial_clusters_ingredientes (
+                    ingrediente_id, ingrediente, fecha, cluster,
+                    cantidad_compras, cantidad_normalizada, nota
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                ingrediente_id,
+                row["ingrediente"],
+                hoy,
+                int(row["cluster"]),
+                int(row["cantidad_compras"]),
+                float(row["cantidad_normalizada"]),
+                "initial"
+            ))
+
+        conn.commit()
+
+    finally:
+        cursor.close()
+        conn.close()
+
+    return df, pipeline
+
+    category_map = category_map or load_or_init_category_map()
     if os.path.exists(dataset_file):
         df = pd.read_csv(dataset_file)
     else:
